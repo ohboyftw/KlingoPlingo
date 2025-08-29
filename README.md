@@ -4,10 +4,10 @@ A production-ready real-time speech-to-speech translation application powered by
 
 ## ✨ Key Features
 
-- 🗣️ **Direct Speech-to-Speech**: No intermediate text - pure audio translation between French and English
+- 🗣️ **Direct Speech-to-Speech**: No intermediate text - pure audio translation between French, English, and German
 - 🌊 **Dual Processing Modes**: Real-time streaming OR single-shot complete audio processing
 - 🎵 **Advanced Voice Preservation**: Maintain original speaker's vocal characteristics, tone, and personality
-- 🔄 **Flexible Language Pairs**: English↔French with auto-detection support  
+- 🔄 **Flexible Language Pairs**: English↔French↔German with auto-detection support  
 - 🎭 **8 Premium Voices**: Alloy, Echo, Fable, Onyx, Nova, Shimmer, Cedar, Marin
 - ⚡ **Ultra-Low Latency**: WebSocket streaming for near-instantaneous translation
 - 🎯 **3 Voice Modes**: Preserve, Enhanced, or Neutral voice processing
@@ -17,11 +17,16 @@ A production-ready real-time speech-to-speech translation application powered by
 ## 🚀 Quick Start
 
 ### 1. **Language Configuration**
-- **Language Pairs**: Choose from 4 pre-configured pairs:
+- **Language Pairs**: Choose from 9 pre-configured pairs:
   - English → French
-  - French → English  
+  - French → English
+  - English → German
+  - German → English
+  - French → German
+  - German → French
   - Auto-detect → English
   - Auto-detect → French
+  - Auto-detect → German
 - **One-Click Swap**: Use "⇄ Swap Languages" to reverse translation direction
 
 ### 2. **Voice & Processing Settings**

@@ -25,7 +25,7 @@ class TestRealtimeTranslationService:
         assert service.api_key == 'test-api-key'
         assert service.base_url == 'wss://api.openai.com/v1'
         assert len(service.voices) == 8
-        assert len(service.languages) == 2
+        assert len(service.languages) == 3
         assert len(service.voice_modes) == 3
     
     def test_voice_options(self, service):
@@ -41,12 +41,15 @@ class TestRealtimeTranslationService:
         """Test language information retrieval."""
         en_info = service.get_language_info('en')
         fr_info = service.get_language_info('fr')
+        de_info = service.get_language_info('de')
         unknown_info = service.get_language_info('unknown')
         
         assert en_info['name'] == 'English'
         assert en_info['flag'] == '🇺🇸'
         assert fr_info['name'] == 'French'
         assert fr_info['flag'] == '🇫🇷'
+        assert de_info['name'] == 'German'
+        assert de_info['flag'] == '🇩🇪'
         assert unknown_info['name'] == 'unknown'
     
     def test_voice_mode_options(self, service):
@@ -86,6 +89,15 @@ class TestRealtimeTranslationService:
         assert 'enhance' in instructions.lower()
         assert 'maintain emotional tone' in instructions.lower()
         assert 'french' in instructions.lower()
+    
+    def test_translation_instructions_german(self, service):
+        """Test translation instructions for German language."""
+        instructions = service._get_translation_instructions('preserve', 'de')
+        
+        assert '# role & objective' in instructions.lower()
+        assert 'german' in instructions.lower()
+        assert 'preserve' in instructions.lower()
+        assert 'french, english, and german' in instructions.lower()
     
     @pytest.mark.asyncio
     async def test_connect_websocket_success(self, service):

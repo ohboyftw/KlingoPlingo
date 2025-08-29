@@ -18,9 +18,14 @@ class SpeechTranslationInterface:
         # Language pair configurations
         self.language_pairs = [
             ("English → French", "en", "fr"),
-            ("French → English", "fr", "en"), 
+            ("French → English", "fr", "en"),
+            ("English → German", "en", "de"),
+            ("German → English", "de", "en"),
+            ("French → German", "fr", "de"),
+            ("German → French", "de", "fr"),
             ("Auto-detect → English", "auto", "en"),
-            ("Auto-detect → French", "auto", "fr")
+            ("Auto-detect → French", "auto", "fr"),
+            ("Auto-detect → German", "auto", "de")
         ]
     
     def translate_audio_single_shot(self, audio_input, language_pair: str, voice: str, 
@@ -134,9 +139,14 @@ class SpeechTranslationInterface:
         """Swap the language pair direction."""
         swap_mapping = {
             "English → French": "French → English",
-            "French → English": "English → French", 
+            "French → English": "English → French",
+            "English → German": "German → English",
+            "German → English": "English → German",
+            "French → German": "German → French", 
+            "German → French": "French → German",
             "Auto-detect → English": "Auto-detect → French",
-            "Auto-detect → French": "Auto-detect → English"
+            "Auto-detect → French": "Auto-detect → German",
+            "Auto-detect → German": "Auto-detect → English"
         }
         return swap_mapping.get(current_pair, current_pair)
     

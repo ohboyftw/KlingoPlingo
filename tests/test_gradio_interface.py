@@ -24,7 +24,7 @@ class TestSpeechTranslationInterface:
         """Test interface initialization."""
         assert interface.service is not None
         assert interface.audio_processor is not None
-        assert len(interface.language_pairs) == 4
+        assert len(interface.language_pairs) == 9
     
     def test_language_pairs(self, interface):
         """Test language pair configurations."""
@@ -33,8 +33,13 @@ class TestSpeechTranslationInterface:
         expected_pairs = [
             ("English → French", "en", "fr"),
             ("French → English", "fr", "en"),
-            ("Auto-detect → English", "auto", "en"), 
-            ("Auto-detect → French", "auto", "fr")
+            ("English → German", "en", "de"),
+            ("German → English", "de", "en"),
+            ("French → German", "fr", "de"),
+            ("German → French", "de", "fr"),
+            ("Auto-detect → English", "auto", "en"),
+            ("Auto-detect → French", "auto", "fr"),
+            ("Auto-detect → German", "auto", "de")
         ]
         
         assert pairs == expected_pairs
@@ -44,8 +49,13 @@ class TestSpeechTranslationInterface:
         test_cases = [
             ("English → French", "French → English"),
             ("French → English", "English → French"),
+            ("English → German", "German → English"),
+            ("German → English", "English → German"),
+            ("French → German", "German → French"),
+            ("German → French", "French → German"),
             ("Auto-detect → English", "Auto-detect → French"),
-            ("Auto-detect → French", "Auto-detect → English"),
+            ("Auto-detect → French", "Auto-detect → German"),
+            ("Auto-detect → German", "Auto-detect → English"),
             ("Invalid → Pair", "Invalid → Pair")  # Should remain unchanged
         ]
         

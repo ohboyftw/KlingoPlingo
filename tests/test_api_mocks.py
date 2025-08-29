@@ -281,6 +281,43 @@ class TestRealtimeAPIScenarios:
             assert '# role & objective' in instructions
     
     @pytest.mark.asyncio
+    async def test_english_to_german_translation(self, service):
+        """Test English to German translation."""
+        
+        # English audio input mock
+        english_audio = b'hello_world_audio_data'
+        
+        # German response
+        responses = [
+            json.dumps({
+                "type": "response.audio.delta",
+                "delta": base64.b64encode(b"hallo").decode()
+            }),
+            json.dumps({
+                "type": "response.audio.delta", 
+                "delta": base64.b64encode(b"_welt").decode()
+            }),
+            json.dumps({"type": "response.audio.done"})
+        ]
+        
+        mock_ws = MockWebSocketServer(responses)
+        
+        with patch('websockets.connect', return_value=mock_ws):
+            result = await service.translate_audio_single_shot(
+                audio_data=english_audio,
+                voice='cedar',
+                voice_mode='preserve',
+                target_lang='de'
+            )
+            
+            assert result == b'hallo_welt'
+            
+            # Verify German instructions were sent
+            session_msg = mock_ws.received_messages[0]
+            instructions = session_msg['session']['instructions'].lower()
+            assert 'german' in instructions
+    
+    @pytest.mark.asyncio
     async def test_connection_failure_recovery(self, service):
         """Test graceful handling of connection failures."""
         

@@ -38,7 +38,8 @@ class RealtimeTranslationService:
         # Language configurations
         self.languages = {
             'en': {'name': 'English', 'flag': '🇺🇸'},
-            'fr': {'name': 'French', 'flag': '🇫🇷'}
+            'fr': {'name': 'French', 'flag': '🇫🇷'},
+            'de': {'name': 'German', 'flag': '🇩🇪'}
         }
         
         # Voice preservation modes
@@ -110,7 +111,7 @@ class RealtimeTranslationService:
         
         # Base instruction following recommended structure
         base_instruction = f"""# Role & Objective
-You are a professional speech translator specializing in French and English.
+You are a professional speech translator specializing in French, English, and German.
 Your task is to translate spoken input to {lang_name} while maintaining natural conversation flow.
 
 # Personality & Tone
