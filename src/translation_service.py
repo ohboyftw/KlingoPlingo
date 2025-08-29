@@ -49,16 +49,19 @@ class RealtimeTranslationService:
         }
     
     async def connect_websocket(self) -> bool:
-        """Establish WebSocket connection to GPT-4o Realtime API."""
+        """Establish WebSocket connection to GPT-Realtime API."""
         try:
+            # Use correct WebSocket URL format
+            ws_url = f"{self.base_url}/realtime?model=gpt-realtime"
+            
             self.websocket = await websockets.connect(
-                f"{self.base_url}/realtime",
+                ws_url,
                 extra_headers={
                     "Authorization": f"Bearer {self.api_key}",
                     "OpenAI-Beta": "realtime=v1"
                 }
             )
-            logger.info("WebSocket connection established")
+            logger.info("WebSocket connection established to GPT-Realtime")
             return True
         except Exception as e:
             logger.error(f"Failed to connect to WebSocket: {e}")
@@ -74,12 +77,21 @@ class RealtimeTranslationService:
         session_config = {
             "type": "session.update",
             "session": {
-                "model": "gpt-4o-realtime-preview",
-                "voice": voice,
-                "input_audio_format": "pcm16",
-                "output_audio_format": "pcm16",
+                "type": "realtime",
+                "model": "gpt-realtime",
+                "output_modalities": ["audio"],
+                "audio": {
+                    "input": {
+                        "format": "pcm16",
+                        "turn_detection": {"type": "semantic_vad", "create_response": True}
+                    },
+                    "output": {
+                        "format": "pcm16",
+                        "voice": voice,
+                        "speed": 1.0
+                    }
+                },
                 "input_audio_transcription": {"model": "whisper-1"},
-                "turn_detection": {"type": "server_vad"},
                 "instructions": instructions,
                 "temperature": 0.6,
                 "max_response_output_tokens": 4096
@@ -90,41 +102,73 @@ class RealtimeTranslationService:
         logger.info(f"Session configured with voice: {voice}, mode: {voice_mode}")
     
     def _get_translation_instructions(self, voice_mode: str, target_lang: str) -> str:
-        """Generate translation instructions based on voice preservation mode."""
+        """Generate translation instructions following OpenAI's best practices."""
         
-        lang_name = self.languages[target_lang]['name']
+        # Handle invalid language gracefully
+        lang_info = self.languages.get(target_lang, {'name': target_lang.title()})
+        lang_name = lang_info['name']
         
-        base_instruction = f"""You are a professional speech translator specializing in French and English.
-Your task is to translate spoken input to {lang_name} while maintaining natural conversation flow."""
-        
+        # Base instruction following recommended structure
+        base_instruction = f"""# Role & Objective
+You are a professional speech translator specializing in French and English.
+Your task is to translate spoken input to {lang_name} while maintaining natural conversation flow.
+
+# Personality & Tone
+- Warm, natural, and expressive
+- Match the original speaker's emotional tone
+- 2-3 sentences per turn maximum
+- Deliver audio response at natural speaking pace
+
+# Language
+- ALWAYS respond in {lang_name} only
+- Do not respond in any other language
+- Maintain the same accent/dialect style when appropriate
+
+# Unclear Audio
+- Only respond to clear audio input
+- If audio is unclear/partial/noisy/silent, ask for clarification in {lang_name}
+- Sample clarification phrases:
+  • "Sorry, I didn't catch that—could you say it again?"
+  • "There's some background noise. Please repeat that."
+  • "I only heard part of that. What did you say?"
+
+# Variety
+- Do not repeat the same sentence twice
+- Vary your responses so it doesn't sound robotic"""
+
+        # Add voice mode specific instructions
         if voice_mode == 'preserve':
-            return f"""{base_instruction}
+            voice_instructions = """
 
-CRITICAL: Preserve the original speaker's voice characteristics including:
-- Vocal tone, pitch, and speaking rhythm
-- Emotional nuances and inflections  
-- Speaking style and personality
-- Age and gender vocal characteristics
-- Accent patterns when translating
-
-Translate the meaning while keeping the speaker's unique vocal identity intact."""
+# Voice Preservation (CRITICAL)
+- PRESERVE the original speaker's voice characteristics including:
+  • Vocal tone, pitch, and speaking rhythm
+  • Emotional nuances and inflections
+  • Speaking style and personality  
+  • Age and gender vocal characteristics
+  • Accent patterns when translating
+- TRANSLATE the meaning while keeping the speaker's unique vocal identity intact"""
         
         elif voice_mode == 'enhanced':
-            return f"""{base_instruction}
+            voice_instructions = """
 
-Enhance the original speaker's voice while preserving core characteristics:
-- Maintain emotional tone and speaking style
-- Preserve personality and inflections
-- Slightly improve clarity and naturalness
-- Keep recognizable vocal identity
-
-Strike a balance between preservation and enhancement."""
+# Voice Enhancement
+- ENHANCE the original speaker's voice while preserving core characteristics:
+  • Maintain emotional tone and speaking style
+  • Preserve personality and inflections
+  • Slightly improve clarity and naturalness
+  • Keep recognizable vocal identity
+- BALANCE preservation with enhancement for optimal clarity"""
         
         else:  # neutral mode
-            return f"""{base_instruction}
+            voice_instructions = """
 
-Provide clear, natural translations using the selected voice profile.
-Focus on accurate meaning transfer and natural speech patterns."""
+# Voice Processing
+- Use the selected voice profile for clear, natural speech
+- Focus on accurate meaning transfer and natural speech patterns
+- Maintain professional, consistent vocal delivery"""
+
+        return base_instruction + voice_instructions
     
     async def translate_audio_streaming(self, audio_generator, voice: str = 'alloy', 
                                        voice_mode: str = 'preserve', target_lang: str = 'fr'):

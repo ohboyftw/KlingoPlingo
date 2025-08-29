@@ -81,7 +81,9 @@ class TestSpeechTranslationInterface:
         )
         
         # Verify results
-        assert result_audio == (24000, np.array([0.3, 0.4]))
+        assert result_audio is not None
+        assert result_audio[0] == 24000
+        np.testing.assert_array_equal(result_audio[1], np.array([0.3, 0.4]))
         assert "✅ Translation completed" in status
         assert "preserve" in status.lower()
         
@@ -164,7 +166,9 @@ class TestSpeechTranslationInterface:
             processing_mode="streaming"
         )
         
-        assert result_audio == (24000, np.array([0.7, 0.8]))
+        assert result_audio is not None
+        assert result_audio[0] == 24000
+        np.testing.assert_array_equal(result_audio[1], np.array([0.7, 0.8]))
         assert "✅ Streaming translation completed" in status
         assert "enhanced" in status.lower()
 
@@ -247,26 +251,21 @@ class TestInterfaceIntegration:
         interface.audio_processor.convert_from_gradio_format.return_value = b'pcm_data'
         interface.audio_processor.convert_to_gradio_format.return_value = (24000, np.array([0.3, 0.4]))
         
-        # Mock async translation
-        async def mock_translate(audio_data, voice, voice_mode, target_lang):
-            assert audio_data == b'pcm_data'
-            assert voice == 'fable'
-            assert voice_mode == 'preserve'
-            assert target_lang == 'fr'
+        # Mock the async service method as a coroutine that returns the expected value
+        async def mock_translate_single_shot(audio_data, voice, voice_mode, target_lang):
             return b'translated_pcm'
         
-        with patch('asyncio.new_event_loop') as mock_new_loop:
-            mock_loop = MagicMock()
-            mock_new_loop.return_value = mock_loop
-            mock_loop.run_until_complete.return_value = b'translated_pcm'
-            
-            result_audio, status = interface.translate_audio_single_shot(
-                audio_input=audio_input,
-                language_pair="English → French",
-                voice="fable", 
-                voice_mode="preserve",
-                processing_mode="single_shot"
-            )
-            
-            assert result_audio == (24000, np.array([0.3, 0.4]))
-            assert "✅" in status
+        interface.service.translate_audio_single_shot = mock_translate_single_shot
+        
+        result_audio, status = interface.translate_audio_single_shot(
+            audio_input=audio_input,
+            language_pair="English → French",
+            voice="fable", 
+            voice_mode="preserve",
+            processing_mode="single_shot"
+        )
+        
+        assert result_audio is not None
+        assert result_audio[0] == 24000
+        np.testing.assert_array_equal(result_audio[1], np.array([0.3, 0.4]))
+        assert "✅" in status

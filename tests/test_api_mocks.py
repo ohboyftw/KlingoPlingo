@@ -12,12 +12,13 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from src.translation_service import RealtimeTranslationService
 
 class MockWebSocketServer:
-    """Mock WebSocket server for testing GPT-4o Realtime API responses."""
+    """Mock WebSocket server for testing GPT-Realtime API responses."""
     
     def __init__(self, responses=None):
         self.responses = responses or []
         self.received_messages = []
         self.closed = False
+        self._response_iter = None
     
     async def send(self, message):
         """Mock send method."""
@@ -29,13 +30,21 @@ class MockWebSocketServer:
     
     def __aiter__(self):
         """Mock async iteration over responses."""
+        self._response_iter = iter(self.responses)
         return self
     
     async def __anext__(self):
         """Mock async next for responses."""
-        if not self.responses:
+        try:
+            return next(self._response_iter)
+        except StopIteration:
             raise StopAsyncIteration
-        return self.responses.pop(0)
+    
+    # Make it awaitable for websockets.connect
+    def __await__(self):
+        async def _await():
+            return self
+        return _await().__await__()
 
 class TestGPT4oAPIMocks:
     """Test cases using mocked GPT-4o API responses."""
@@ -53,7 +62,7 @@ class TestGPT4oAPIMocks:
         responses = [
             json.dumps({
                 "type": "session.update", 
-                "session": {"model": "gpt-4o-realtime-preview"}
+                "session": {"model": "gpt-realtime"}
             }),
             json.dumps({
                 "type": "response.audio.delta",
@@ -202,19 +211,26 @@ class TestGPT4oAPIMocks:
             assert session_msg['type'] == 'session.update'
             
             session_config = session_msg['session']
-            assert session_config['voice'] == voice
-            assert session_config['model'] == 'gpt-4o-realtime-preview'
-            assert session_config['input_audio_format'] == 'pcm16'
-            assert session_config['output_audio_format'] == 'pcm16'
+            assert session_config['audio']['output']['voice'] == voice
+            assert session_config['model'] == 'gpt-realtime'
+            assert session_config['type'] == 'realtime'
+            assert session_config['audio']['input']['format'] == 'pcm16'
+            assert session_config['audio']['output']['format'] == 'pcm16'
             
-            # Check instructions contain expected voice mode keywords
+            # Check instructions contain expected voice mode keywords and structure
             instructions = session_config['instructions'].lower()
+            assert '# role & objective' in instructions  # Check structured format
+            assert '# language' in instructions
+            
             if voice_mode == 'preserve':
                 assert 'preserve' in instructions
                 assert 'vocal tone' in instructions
+                assert 'voice preservation (critical)' in instructions
             elif voice_mode == 'enhanced':
                 assert 'enhance' in instructions
+                assert 'voice enhancement' in instructions
             else:  # neutral
+                assert 'voice processing' in instructions
                 assert 'preserve' not in instructions
 
 class TestRealtimeAPIScenarios:
@@ -262,6 +278,7 @@ class TestRealtimeAPIScenarios:
             instructions = session_msg['session']['instructions'].lower()
             assert 'preserve' in instructions
             assert 'vocal tone' in instructions
+            assert '# role & objective' in instructions
     
     @pytest.mark.asyncio
     async def test_connection_failure_recovery(self, service):

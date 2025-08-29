@@ -92,10 +92,7 @@ class SpeechTranslationInterface:
             audio_bytes = self.audio_processor.convert_from_gradio_format(audio_input)
             
             # Run async streaming translation
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            
-            try:
+            async def run_streaming_translation():
                 # Create async generator for audio chunks
                 async def audio_generator():
                     async for chunk in self.audio_processor.chunk_audio_for_streaming(audio_bytes):
@@ -112,7 +109,14 @@ class SpeechTranslationInterface:
                     translated_chunks.append(audio_chunk)
                 
                 # Combine chunks
-                translated_audio = b"".join(translated_chunks)
+                return b"".join(translated_chunks)
+            
+            # Run the async function
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            try:
+                translated_audio = loop.run_until_complete(run_streaming_translation())
                 
                 # Convert back to Gradio format
                 output_audio = self.audio_processor.convert_to_gradio_format(translated_audio)

@@ -62,25 +62,29 @@ class TestRealtimeTranslationService:
         """Test translation instructions for preserve mode."""
         instructions = service._get_translation_instructions('preserve', 'fr')
         
-        assert 'professional speech translator' in instructions.lower()
+        assert '# role & objective' in instructions.lower()
+        assert '# voice preservation (critical)' in instructions.lower()
         assert 'preserve' in instructions.lower()
         assert 'vocal tone' in instructions.lower()
         assert 'french' in instructions.lower()
+        assert '# variety' in instructions.lower()
     
     def test_translation_instructions_neutral_mode(self, service):
         """Test translation instructions for neutral mode."""
         instructions = service._get_translation_instructions('neutral', 'en')
         
-        assert 'professional speech translator' in instructions.lower()
+        assert '# role & objective' in instructions.lower()
+        assert '# voice processing' in instructions.lower()
         assert 'english' in instructions.lower()
-        assert 'preserve' not in instructions.lower()
+        assert 'voice preservation (critical)' not in instructions.lower()
     
     def test_translation_instructions_enhanced_mode(self, service):
         """Test translation instructions for enhanced mode."""
         instructions = service._get_translation_instructions('enhanced', 'fr')
         
+        assert '# voice enhancement' in instructions.lower()
         assert 'enhance' in instructions.lower()
-        assert 'preserve core characteristics' in instructions.lower()
+        assert 'maintain emotional tone' in instructions.lower()
         assert 'french' in instructions.lower()
     
     @pytest.mark.asyncio
@@ -88,7 +92,11 @@ class TestRealtimeTranslationService:
         """Test successful WebSocket connection."""
         mock_websocket = AsyncMock()
         
-        with patch('websockets.connect', return_value=mock_websocket):
+        # Make the mock awaitable
+        async def mock_connect(*args, **kwargs):
+            return mock_websocket
+        
+        with patch('websockets.connect', side_effect=mock_connect):
             result = await service.connect_websocket()
             
             assert result is True
@@ -116,9 +124,10 @@ class TestRealtimeTranslationService:
         sent_data = json.loads(mock_websocket.send.call_args[0][0])
         
         assert sent_data['type'] == 'session.update'
-        assert sent_data['session']['model'] == 'gpt-4o-realtime-preview'
-        assert sent_data['session']['voice'] == 'alloy'
-        assert sent_data['session']['input_audio_format'] == 'pcm16'
+        assert sent_data['session']['model'] == 'gpt-realtime'
+        assert sent_data['session']['type'] == 'realtime'
+        assert sent_data['session']['audio']['output']['voice'] == 'alloy'
+        assert sent_data['session']['audio']['input']['format'] == 'pcm16'
         assert 'preserve' in sent_data['session']['instructions'].lower()
     
     @pytest.mark.asyncio
@@ -136,9 +145,11 @@ class TestRealtimeTranslationService:
         
         mock_websocket.__aiter__.return_value = iter(mock_responses)
         
-        with patch('websockets.connect', return_value=mock_websocket):
-            service.websocket = mock_websocket
-            
+        # Make websockets.connect awaitable
+        async def mock_connect(*args, **kwargs):
+            return mock_websocket
+        
+        with patch('websockets.connect', side_effect=mock_connect):
             result = await service.translate_audio_single_shot(
                 audio_data=test_audio,
                 voice='alloy',
@@ -163,9 +174,11 @@ class TestRealtimeTranslationService:
         
         mock_websocket.__aiter__.return_value = iter([error_response])
         
-        with patch('websockets.connect', return_value=mock_websocket):
-            service.websocket = mock_websocket
-            
+        # Make websockets.connect awaitable
+        async def mock_connect(*args, **kwargs):
+            return mock_websocket
+        
+        with patch('websockets.connect', side_effect=mock_connect):
             with pytest.raises(Exception) as exc_info:
                 await service.translate_audio_single_shot(
                     audio_data=test_audio,
@@ -187,46 +200,49 @@ class TestRealtimeTranslationService:
         
         mock_websocket = AsyncMock()
         
-        # Mock streaming responses
-        mock_responses = [
-            json.dumps({"type": "response.audio.delta", "delta": base64.b64encode(b"translated1").decode()}),
-            json.dumps({"type": "response.audio.delta", "delta": base64.b64encode(b"translated2").decode()}),
-            json.dumps({"type": "response.audio.done"})
-        ]
-        
         # Setup response handler
         service.response_queue.put(b"translated1")
         service.response_queue.put(b"translated2") 
         service.response_queue.put(None)  # End signal
         
-        with patch('websockets.connect', return_value=mock_websocket):
-            service.websocket = mock_websocket
-            
-            results = []
-            async for chunk in service.translate_audio_streaming(
-                mock_audio_generator(),
-                voice='nova',
-                voice_mode='enhanced',
-                target_lang='en'
-            ):
-                results.append(chunk)
-            
-            assert results == [b"translated1", b"translated2"]
+        # Make websockets.connect awaitable
+        async def mock_connect(*args, **kwargs):
+            return mock_websocket
+        
+        with patch('websockets.connect', side_effect=mock_connect):
+            with patch.object(service, '_handle_responses') as mock_handler:
+                results = []
+                async for chunk in service.translate_audio_streaming(
+                    mock_audio_generator(),
+                    voice='nova',
+                    voice_mode='enhanced',
+                    target_lang='en'
+                ):
+                    results.append(chunk)
+                
+                assert results == [b"translated1", b"translated2"]
     
     @pytest.mark.asyncio
     async def test_websocket_connection_cleanup(self, service):
         """Test WebSocket connection is properly cleaned up."""
         mock_websocket = AsyncMock()
-        service.websocket = mock_websocket
         
-        try:
-            await service.translate_audio_single_shot(b'test', 'alloy', 'preserve', 'fr')
-        except:
-            pass  # Expected to fail in test
+        # Mock empty response to trigger cleanup
+        mock_websocket.__aiter__.return_value = iter([])
         
-        # Verify cleanup happened
-        mock_websocket.close.assert_called_once()
-        assert service.websocket is None
+        # Make websockets.connect awaitable
+        async def mock_connect(*args, **kwargs):
+            return mock_websocket
+        
+        with patch('websockets.connect', side_effect=mock_connect):
+            try:
+                await service.translate_audio_single_shot(b'test', 'alloy', 'preserve', 'fr')
+            except:
+                pass  # Expected to fail in test
+            
+            # Verify cleanup happened
+            mock_websocket.close.assert_called_once()
+            assert service.websocket is None
 
 class TestTranslationServiceEdgeCases:
     """Test edge cases and error conditions."""

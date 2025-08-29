@@ -113,12 +113,14 @@ GRADIO_TEST_AUDIO = {
 # Mock WebSocket responses for different scenarios
 MOCK_WEBSOCKET_RESPONSES = {
     'successful_translation': [
+        '{"type": "session.updated", "session": {"model": "gpt-realtime", "type": "realtime"}}',
         '{"type": "response.audio.delta", "delta": "' + 
         AudioTestData.create_test_pcm16_bytes(0.5).hex() + '"}',
         '{"type": "response.audio.done"}'
     ],
     
     'streaming_translation': [
+        '{"type": "session.updated", "session": {"model": "gpt-realtime", "type": "realtime"}}',
         '{"type": "response.audio.delta", "delta": "chunk1"}',
         '{"type": "response.audio.delta", "delta": "chunk2"}', 
         '{"type": "response.audio.delta", "delta": "chunk3"}',
