@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Speech-to-Speech Translation App for Hugging Face Spaces
-Powered by OpenAI GPT-4o Realtime API with Voice Preservation
+Powered by OpenAI GPT Realtime API with Voice Preservation
 """
 
 import os
@@ -40,7 +40,7 @@ def create_error_interface():
                 OpenAI API key is not configured properly.
             </p>
             <p style="color: #64748b; font-size: 0.9rem;">
-                Please set the OPENAI_API_KEY environment variable with a valid OpenAI API key that has access to GPT-4o Realtime API.
+                Please set the OPENAI_API_KEY environment variable with a valid OpenAI API key that has access to GPT Realtime API.
             </p>
         </div>
         """)

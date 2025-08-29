@@ -114,7 +114,7 @@ OPENAI_API_KEY="your-key" OPENAI_API_BASE="wss://custom.api.com/v1" python app.p
 ```
 📁 Project Structure
 ├── src/
-│   ├── translation_service.py      # 🌐 GPT-4o Realtime WebSocket client
+│   ├── translation_service.py      # 🌐 GPT Realtime WebSocket client
 │   ├── audio_handler.py           # 🎵 Audio processing & format conversion  
 │   ├── speech_gradio_interface.py # 🖥️  Gradio UI components & event handling
 │   └── __init__.py                # 📦 Package initialization
@@ -144,7 +144,7 @@ OPENAI_API_KEY="your-key" OPENAI_API_BASE="wss://custom.api.com/v1" python app.p
 ### Test Coverage
 - **Unit Tests**: Individual component functionality 
 - **Integration Tests**: WebSocket connection and audio pipeline
-- **Mock Tests**: Simulated GPT-4o API responses and error scenarios
+- **Mock Tests**: Simulated GPT Realtime API responses and error scenarios
 - **Audio Tests**: Format conversion, chunking, and file operations
 - **Interface Tests**: Gradio component behavior and event handling
 

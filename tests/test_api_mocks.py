@@ -46,8 +46,8 @@ class MockWebSocketServer:
             return self
         return _await().__await__()
 
-class TestGPT4oAPIMocks:
-    """Test cases using mocked GPT-4o API responses."""
+class TestGPTRealtimeAPIMocks:
+    """Test cases using mocked GPT Realtime API responses."""
     
     @pytest.fixture
     def service(self):
@@ -58,7 +58,7 @@ class TestGPT4oAPIMocks:
     async def test_successful_translation_response(self, service):
         """Test successful translation with realistic API responses."""
         
-        # Create realistic GPT-4o response sequence
+        # Create realistic GPT Realtime response sequence
         responses = [
             json.dumps({
                 "type": "session.update", 

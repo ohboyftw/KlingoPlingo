@@ -9,7 +9,7 @@ from .translation_service import translation_service
 from .audio_handler import audio_processor
 
 class SpeechTranslationInterface:
-    """Gradio interface for speech-to-speech translation using GPT-4o Realtime API."""
+    """Gradio interface for speech-to-speech translation using GPT Realtime API."""
     
     def __init__(self):
         self.service = translation_service
@@ -188,7 +188,7 @@ class SpeechTranslationInterface:
                     🎤 Speech-to-Speech Translator
                 </h1>
                 <p style="font-size: 1.3rem; color: #64748b;">
-                    Real-time voice translation with GPT-4o Realtime API • Voice preservation available
+                    Real-time voice translation with GPT Realtime API • Voice preservation available
                 </p>
             </div>
             """)

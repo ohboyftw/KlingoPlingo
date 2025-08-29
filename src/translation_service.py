@@ -14,7 +14,7 @@ from openai import OpenAI
 logger = logging.getLogger(__name__)
 
 class RealtimeTranslationService:
-    """Real-time speech-to-speech translation service using GPT-4o Realtime API."""
+    """Real-time speech-to-speech translation service using GPT Realtime API."""
     
     def __init__(self):
         self.api_key = os.getenv('OPENAI_API_KEY')
@@ -173,7 +173,7 @@ Your task is to translate spoken input to {lang_name} while maintaining natural 
     async def translate_audio_streaming(self, audio_generator, voice: str = 'alloy', 
                                        voice_mode: str = 'preserve', target_lang: str = 'fr'):
         """
-        Stream audio translation using GPT-4o Realtime API.
+        Stream audio translation using GPT Realtime API.
         
         Args:
             audio_generator: Generator yielding audio chunks (bytes)
@@ -228,7 +228,7 @@ Your task is to translate spoken input to {lang_name} while maintaining natural 
     async def translate_audio_single_shot(self, audio_data: bytes, voice: str = 'alloy',
                                          voice_mode: str = 'preserve', target_lang: str = 'fr') -> bytes:
         """
-        Single-shot audio translation using GPT-4o Realtime API.
+        Single-shot audio translation using GPT Realtime API.
         
         Args:
             audio_data: Complete audio data as bytes

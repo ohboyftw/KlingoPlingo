@@ -8,7 +8,7 @@ from .translation_service import translation_service
 from .audio_handler import audio_processor
 
 class SpeechTranslationInterface:
-    """Gradio interface for speech-to-speech translation using GPT-4o Realtime API."""
+    """Gradio interface for speech-to-speech translation using GPT Realtime API."""
     
     def __init__(self):
         self.service = translation_service
