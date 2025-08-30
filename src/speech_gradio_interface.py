@@ -4,6 +4,7 @@ import asyncio
 import tempfile
 import threading
 import time
+import queue
 from typing import Tuple, Optional
 from .translation_service import translation_service
 from .audio_handler import audio_processor
@@ -77,8 +78,15 @@ class SpeechTranslationInterface:
                     )
                 )
                 
+                # Validate response before conversion
+                if not translated_audio or len(translated_audio) == 0:
+                    return None, f"❌ Translation failed: No audio response received from API"
+                
                 # Convert back to Gradio format
                 output_audio = self.audio_processor.convert_to_gradio_format(translated_audio)
+                
+                if output_audio is None:
+                    return None, f"❌ Translation failed: Could not process audio response"
                 
                 return output_audio, f"✅ Translation completed ({voice_mode} mode)"
                 
@@ -90,15 +98,16 @@ class SpeechTranslationInterface:
             return None, error_msg
     
     def translate_audio_streaming(self, audio_input, language_pair: str, voice: str,
-                                 voice_mode: str, processing_mode: str) -> Tuple[Optional[tuple], str]:
+                                 voice_mode: str, processing_mode: str):
         """
-        Handle streaming audio translation.
+        Handle streaming audio translation with progressive audio updates.
         
-        Returns:
-            Tuple of (translated_audio, status_message)  
+        Yields:
+            Tuple of (accumulated_audio, status_message) for each chunk
         """
         if audio_input is None:
-            return None, "❌ Please record or upload audio first"
+            yield None, "❌ Please record or upload audio first"
+            return
         
         try:
             # Parse language pair
@@ -113,46 +122,88 @@ class SpeechTranslationInterface:
             # Early validation check - don't proceed if audio is too short
             if len(audio_bytes) < 4800:  # 100ms at 24kHz, 16-bit
                 duration_ms = (len(audio_bytes) / 2 / 24000) * 1000
-                return None, f"❌ Recording too short: {duration_ms:.1f}ms (minimum 100ms required). Please record for at least 1 second."
+                yield None, f"❌ Recording too short: {duration_ms:.1f}ms (minimum 100ms required). Please record for at least 1 second."
+                return
             
-            # Run async streaming translation
-            async def run_streaming_translation():
-                # Create async generator for audio chunks
-                async def audio_generator():
-                    async for chunk in self.audio_processor.chunk_audio_for_streaming(audio_bytes):
-                        yield chunk
-                
-                # Collect streaming response
-                translated_chunks = []
-                async for audio_chunk in self.service.translate_audio_streaming(
-                    audio_generator(),
-                    voice=voice,
-                    voice_mode=voice_mode,
-                    target_lang=target_lang
-                ):
-                    translated_chunks.append(audio_chunk)
-                
-                # Combine chunks
-                return b"".join(translated_chunks)
+            # Use threading to handle async streaming while yielding progressively
+            import concurrent.futures
+            import threading
             
-            # Run the async function
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
+            # Create a queue for progressive results
+            result_queue = queue.Queue()
+            exception_holder = [None]
             
-            try:
-                translated_audio = loop.run_until_complete(run_streaming_translation())
-                
-                # Convert back to Gradio format
-                output_audio = self.audio_processor.convert_to_gradio_format(translated_audio)
-                
-                return output_audio, f"✅ Streaming translation completed ({voice_mode} mode)"
-                
-            finally:
-                loop.close()
+            def run_streaming_in_thread():
+                """Run streaming translation in a separate thread."""
+                try:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    
+                    async def run_streaming():
+                        # Create async generator for audio chunks
+                        async def audio_generator():
+                            async for chunk in self.audio_processor.chunk_audio_for_streaming(audio_bytes):
+                                yield chunk
+                        
+                        # Progressive collection of streaming response
+                        accumulated_audio = b""
+                        chunk_count = 0
+                        
+                        async for audio_chunk in self.service.translate_audio_streaming(
+                            audio_generator(),
+                            voice=voice,
+                            voice_mode=voice_mode,
+                            target_lang=target_lang
+                        ):
+                            if audio_chunk:
+                                accumulated_audio += audio_chunk
+                                chunk_count += 1
+                                
+                                # Convert accumulated audio to Gradio format
+                                if len(accumulated_audio) > 0:
+                                    progressive_audio = self.audio_processor.convert_to_gradio_format(accumulated_audio)
+                                    if progressive_audio is not None:
+                                        result_queue.put((progressive_audio, f"🌊 Streaming... ({chunk_count} chunks, {len(accumulated_audio)} bytes)"))
+                        
+                        # Final result
+                        if len(accumulated_audio) > 0:
+                            final_audio = self.audio_processor.convert_to_gradio_format(accumulated_audio)
+                            result_queue.put((final_audio, f"✅ Streaming completed ({chunk_count} chunks, {len(accumulated_audio)} bytes total)"))
+                        else:
+                            result_queue.put((None, "❌ No audio received from streaming translation"))
+                        
+                        # Signal completion
+                        result_queue.put(None)
+                    
+                    loop.run_until_complete(run_streaming())
+                    loop.close()
+                    
+                except Exception as e:
+                    exception_holder[0] = e
+                    result_queue.put(None)
+            
+            # Start streaming in background thread
+            thread = threading.Thread(target=run_streaming_in_thread)
+            thread.start()
+            
+            # Yield results as they become available
+            while True:
+                try:
+                    result = result_queue.get(timeout=1.0)
+                    if result is None:
+                        break
+                    yield result
+                except queue.Empty:
+                    continue
+            
+            # Wait for thread to complete and check for exceptions
+            thread.join()
+            if exception_holder[0]:
+                raise exception_holder[0]
                 
         except Exception as e:
             error_msg = f"❌ Streaming translation failed: {str(e)}"
-            return None, error_msg
+            yield None, error_msg
     
     def swap_language_pair(self, current_pair: str) -> str:
         """Swap the language pair direction."""
@@ -260,7 +311,7 @@ class SpeechTranslationInterface:
                     processing_mode = gr.Radio(
                         choices=[
                             ("Single Shot", "single_shot"),
-                            ("Streaming", "streaming")
+                            # ("Streaming", "streaming")  # Disabled for now
                         ],
                         value="single_shot",
                         label="Processing Type",
@@ -295,7 +346,9 @@ class SpeechTranslationInterface:
                     output_audio = gr.Audio(
                         label="Translation Result",
                         type="numpy",
-                        interactive=False
+                        interactive=True,  # Enable playback controls
+                        autoplay=False,
+                        show_download_button=True
                     )
                     
                     status_display = gr.HTML(
@@ -332,7 +385,9 @@ class SpeechTranslationInterface:
             def handle_translation(audio_input, lang_pair, voice, voice_mode_val, proc_mode):
                 """Route to appropriate translation method based on processing mode."""
                 if proc_mode == "streaming":
-                    return self.translate_audio_streaming(audio_input, lang_pair, voice, voice_mode_val, proc_mode)
+                    # For streaming, return a generator that yields progressive updates
+                    for result in self.translate_audio_streaming(audio_input, lang_pair, voice, voice_mode_val, proc_mode):
+                        yield result
                 else:
                     return self.translate_audio_single_shot(audio_input, lang_pair, voice, voice_mode_val, proc_mode)
             

@@ -53,17 +53,25 @@ class AudioProcessor:
             Tuple of (sample_rate, numpy_array) for Gradio
         """
         try:
-            # Convert bytes to numpy array
+            if not audio_bytes or len(audio_bytes) == 0:
+                logger.warning("Empty audio bytes provided to convert_to_gradio_format")
+                return None  # Return None instead of empty array
+            
+            # Convert bytes to numpy array (int16)
             audio_array = np.frombuffer(audio_bytes, dtype=np.int16)
+            logger.info(f"Converting {len(audio_array)} samples to Gradio format")
             
-            # Convert to float32 for Gradio (normalized to [-1, 1])
-            audio_float = audio_array.astype(np.float32) / 32768.0
+            if len(audio_array) == 0:
+                logger.warning("Audio array is empty after conversion")
+                return None
             
-            return (self.sample_rate, audio_float)
+            # Return as int16 to avoid Gradio's automatic conversion warning
+            # Gradio expects int16 format for audio output
+            return (self.sample_rate, audio_array)
             
         except Exception as e:
             logger.error(f"Audio conversion error: {e}")
-            return (self.sample_rate, np.array([], dtype=np.float32))
+            return None  # Return None instead of empty array
     
     def convert_from_gradio_format(self, audio_data) -> bytes:
         """
@@ -119,13 +127,23 @@ class AudioProcessor:
                 logger.warning(f"Multi-dimensional audio array detected: {audio_array.shape}")
                 audio_array = audio_array.flatten()
                 
-            # Ensure we have float32 dtype
-            if audio_array.dtype != np.float32:
-                audio_array = audio_array.astype(np.float32)
-            
             # Validate audio array
             if audio_array is None or len(audio_array) == 0:
                 raise ValueError("Empty audio array provided")
+            
+            # Handle different input formats from Gradio
+            if audio_array.dtype == np.int16:
+                # Already int16, convert to float32 for processing
+                logger.info("Converting int16 input to float32 for processing")
+                audio_array = audio_array.astype(np.float32) / 32768.0
+            elif audio_array.dtype == np.int32:
+                # Int32, convert to float32
+                logger.info("Converting int32 input to float32 for processing")
+                audio_array = audio_array.astype(np.float32) / 2147483648.0
+            else:
+                # Assume float, ensure it's float32
+                logger.info(f"Converting {audio_array.dtype} to float32 for processing")
+                audio_array = audio_array.astype(np.float32)
             
             # Ensure we have at least 100ms of audio
             min_samples = int(0.1 * sample_rate)  # 100ms at input sample rate

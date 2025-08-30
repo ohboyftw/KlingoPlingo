@@ -200,42 +200,85 @@ Your task is to translate spoken input to {lang_name} while maintaining natural 
 
     async def translate_audio_streaming(self, audio_generator, voice: str = 'alloy', 
                                        voice_mode: str = 'preserve', target_lang: str = 'fr'):
+        """
+        Streaming translation - for Gradio UI, collect all audio first then process like single-shot.
+        True streaming would require real-time audio input which Gradio doesn't support well.
+        """
         if not await self.connect_websocket():
             raise Exception("Failed to establish WebSocket connection")
         
         try:
             await self.configure_session(voice, voice_mode, target_lang)
             
-            response_task = asyncio.create_task(self._handle_responses())
-            
+            # Collect all audio chunks into a single buffer
+            all_audio_data = b""
             total_audio_bytes = 0
             
             async for audio_chunk in audio_generator:
-                await self.backpressure_event.wait()
                 if audio_chunk:
+                    all_audio_data += audio_chunk
                     total_audio_bytes += len(audio_chunk)
-                    message = {
-                        "type": "input_audio_buffer.append",
-                        "audio": base64.b64encode(audio_chunk).decode()
-                    }
-                    await self.websocket.send(json.dumps(message))
             
             if total_audio_bytes == 0:
                 raise Exception("No audio data provided in streaming mode")
-
-            await self.websocket.send(json.dumps({"type": "input_audio_buffer.commit"}))
             
-            # Trigger response generation for streaming
+            logger.info(f"Collected {total_audio_bytes} bytes for streaming translation")
+            
+            # Validate the collected audio
+            self._validate_audio_buffer(all_audio_data, "(streaming)")
+            
+            # Send as single audio buffer (more reliable than chunking)
+            audio_b64 = base64.b64encode(all_audio_data).decode('ascii')
+            
+            message = {"type": "input_audio_buffer.append", "audio": audio_b64}
+            await self.websocket.send(json.dumps(message))
+            
+            # Create conversation item
+            conversation_item = {
+                "type": "conversation.item.create",
+                "item": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_audio", "audio": audio_b64}]
+                }
+            }
+            await self.websocket.send(json.dumps(conversation_item))
+            
+            # Commit and trigger response
+            await self.websocket.send(json.dumps({"type": "input_audio_buffer.commit"}))
             await self.websocket.send(json.dumps({"type": "response.create"}))
             
-            while True:
-                try:
-                    response = self.response_queue.get(timeout=1.0)
-                    if response is None:
-                        break
-                    yield response
-                except queue.Empty:
-                    continue
+            # Collect response chunks as they arrive (true streaming output)
+            translated_audio = b""
+            timeout = time.time() + 30
+            
+            async for message in self.websocket:
+                if time.time() > timeout:
+                    raise Exception("Streaming translation timeout")
+                    
+                event = json.loads(message)
+                logger.info(f"Received streaming event: {event['type']}")
+                
+                if event["type"] == "response.audio.delta":
+                    audio_chunk = base64.b64decode(event["delta"])
+                    translated_audio += audio_chunk
+                    # Yield chunks as they arrive for true streaming
+                    yield audio_chunk
+                elif event["type"] == "response.audio.done":
+                    logger.info("Streaming audio response completed")
+                    break
+                elif event["type"] == "response.done":
+                    logger.info("Streaming response completed")
+                    break
+                elif event["type"] == "error":
+                    logger.error(f"API error event: {event}")
+                    raise Exception(f"API error: {event.get('error', {}).get('message', 'Unknown error')}")
+                elif event["type"] == "session.created":
+                    logger.info("Session created successfully")
+                elif event["type"] == "session.updated":
+                    logger.info("Session updated successfully")
+            
+            logger.info(f"Streaming translation completed: {len(translated_audio)} bytes total")
                     
         except Exception as e:
             logger.error(f"Streaming translation error: {e}")
@@ -323,6 +366,12 @@ Your task is to translate spoken input to {lang_name} while maintaining natural 
                     logger.info("Session created successfully")
                 elif event["type"] == "session.updated":
                     logger.info("Session updated successfully")
+            
+            logger.info(f"Translation completed: {len(translated_audio)} bytes of audio")
+            
+            if len(translated_audio) == 0:
+                logger.warning("No audio data received from OpenAI API")
+                raise Exception("No audio response received from OpenAI - check API connection and session configuration")
             
             return translated_audio
             
