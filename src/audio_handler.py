@@ -76,10 +76,52 @@ class AudioProcessor:
             PCM16 audio bytes
         """
         try:
-            if audio_data is None or len(audio_data) != 2:
-                raise ValueError("Invalid audio data format")
+            logger.info(f"Converting audio data: type={type(audio_data)}")
+            
+            if audio_data is None:
+                raise ValueError("Audio data is None")
+                
+            if not isinstance(audio_data, (tuple, list)) or len(audio_data) != 2:
+                raise ValueError(f"Invalid audio data format: expected tuple/list of length 2, got {type(audio_data)} with length {len(audio_data) if hasattr(audio_data, '__len__') else 'N/A'}")
             
             sample_rate, audio_array = audio_data
+            logger.info(f"Sample rate: {sample_rate}, Audio array type: {type(audio_array)}")
+            
+            # Convert to numpy array if needed and validate
+            if not isinstance(audio_array, np.ndarray):
+                logger.info("Converting to numpy array")
+                try:
+                    audio_array = np.array(audio_array, dtype=np.float32)
+                except (ValueError, TypeError) as e:
+                    logger.error(f"Failed to convert to numpy array: {e}")
+                    # Try to extract from nested structure
+                    if hasattr(audio_array, '__iter__'):
+                        try:
+                            # Flatten any nested structure
+                            flat_data = []
+                            def flatten_recursive(data):
+                                if isinstance(data, (list, tuple)):
+                                    for item in data:
+                                        flatten_recursive(item)
+                                else:
+                                    flat_data.append(float(data))
+                            flatten_recursive(audio_array)
+                            audio_array = np.array(flat_data, dtype=np.float32)
+                        except Exception as nested_e:
+                            raise ValueError(f"Cannot process audio data structure: {nested_e}")
+                    else:
+                        raise ValueError(f"Cannot convert audio data to numpy array: {e}")
+            
+            logger.info(f"Audio array shape: {audio_array.shape}, dtype: {audio_array.dtype}")
+            
+            # Handle nested arrays - flatten if multidimensional
+            if audio_array.ndim > 1:
+                logger.warning(f"Multi-dimensional audio array detected: {audio_array.shape}")
+                audio_array = audio_array.flatten()
+                
+            # Ensure we have float32 dtype
+            if audio_array.dtype != np.float32:
+                audio_array = audio_array.astype(np.float32)
             
             # Validate audio array
             if audio_array is None or len(audio_array) == 0:
@@ -110,14 +152,27 @@ class AudioProcessor:
             
             # Convert to int16 PCM
             audio_int16 = (audio_array * 32767).astype(np.int16)
+            logger.info(f"Converted to int16: min={audio_int16.min()}, max={audio_int16.max()}, samples={len(audio_int16)}")
 
             # Create an AudioSegment from the raw audio data
-            audio_segment = AudioSegment(audio_int16.tobytes(), frame_rate=self.sample_rate, sample_width=2, channels=1)
+            try:
+                audio_bytes = audio_int16.tobytes()
+                logger.info(f"Audio bytes length: {len(audio_bytes)}")
+                audio_segment = AudioSegment(audio_bytes, frame_rate=self.sample_rate, sample_width=2, channels=1)
+                logger.info(f"AudioSegment created: duration={len(audio_segment)}ms")
+            except Exception as e:
+                logger.error(f"Failed to create AudioSegment: {e}")
+                # Fallback: return raw bytes without trimming
+                result_bytes = audio_int16.tobytes()
+                logger.info(f"Fallback conversion: {len(result_bytes)} bytes ({len(result_bytes)/(2*self.sample_rate)*1000:.1f}ms)")
+                return result_bytes
 
             # Trim silence
-            trimmed_segment = self.trim_silence(audio_segment)
-
-            logger.info(f"Trimmed audio from {len(audio_segment)}ms to {len(trimmed_segment)}ms")
+            try:
+                trimmed_segment = self.trim_silence(audio_segment)
+            except Exception as e:
+                logger.warning(f"Failed to trim silence: {e}, using original audio")
+                trimmed_segment = audio_segment
             
             result_bytes = trimmed_segment.raw_data
             logger.info(f"Converted audio: {len(result_bytes)} bytes ({len(result_bytes)/(2*self.sample_rate)*1000:.1f}ms)")

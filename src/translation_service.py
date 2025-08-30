@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 class RealtimeTranslationService:
     """Real-time speech-to-speech translation service using GPT Realtime API."""
     
-    def __init__(self, model: str = "gpt-realtime-2025-08-28"):
+    def __init__(self, model: str = "gpt-realtime"):
         self.api_key = os.getenv('OPENAI_API_KEY')
         self.base_url = os.getenv('OPENAI_API_BASE', 'wss://api.openai.com/v1')
         self.model = model
@@ -104,8 +104,21 @@ class RealtimeTranslationService:
         session_config = {
             "type": "session.update",
             "session": {
-                "model": "gpt-realtime",
+                "modalities": ["text", "audio"],
                 "instructions": instructions,
+                "voice": voice,
+                "input_audio_format": "pcm16",
+                "output_audio_format": "pcm16",
+                #"turn_detection": {"type": "server_vad", "threshold": 0.5, "prefix_padding_ms": 300, "silence_duration_ms": 200},
+                "turn_detection": {
+                "type": "server_vad",
+                "threshold": 0.4,           
+                "prefix_padding_ms": 200,   
+                "silence_duration_ms": 1000  
+                },
+               #"turn_detection": "null",
+                "temperature": 0.6,
+                "max_response_output_tokens": 4096
             }
         }
         
@@ -212,6 +225,9 @@ Your task is to translate spoken input to {lang_name} while maintaining natural 
 
             await self.websocket.send(json.dumps({"type": "input_audio_buffer.commit"}))
             
+            # Trigger response generation for streaming
+            await self.websocket.send(json.dumps({"type": "response.create"}))
+            
             while True:
                 try:
                     response = self.response_queue.get(timeout=1.0)
@@ -264,10 +280,23 @@ Your task is to translate spoken input to {lang_name} while maintaining natural 
 
             await asyncio.sleep(0.1) # Add a small delay
             
+            # Create conversation item
+            conversation_item = {
+                "type": "conversation.item.create",
+                "item": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_audio", "audio": audio_b64}]
+                }
+            }
+            await self.websocket.send(json.dumps(conversation_item))
+            
             commit_message = {"type": "input_audio_buffer.commit"}
-            with open("commit_message.log", "w") as f:
-                f.write(json.dumps(commit_message))
             await self.websocket.send(json.dumps(commit_message))
+            
+            # CRITICAL: Trigger response generation
+            response_create = {"type": "response.create"}
+            await self.websocket.send(json.dumps(response_create))
             
             translated_audio = b""
             timeout = time.time() + 30
@@ -277,13 +306,23 @@ Your task is to translate spoken input to {lang_name} while maintaining natural 
                     raise Exception("Translation timeout")
                     
                 event = json.loads(message)
+                logger.info(f"Received event: {event['type']}")
                 
                 if event["type"] == "response.audio.delta":
                     translated_audio += base64.b64decode(event["delta"])
                 elif event["type"] == "response.audio.done":
+                    logger.info("Audio response completed")
+                    break
+                elif event["type"] == "response.done":
+                    logger.info("Response completed")
                     break
                 elif event["type"] == "error":
+                    logger.error(f"API error event: {event}")
                     raise Exception(f"API error: {event.get('error', {}).get('message', 'Unknown error')}")
+                elif event["type"] == "session.created":
+                    logger.info("Session created successfully")
+                elif event["type"] == "session.updated":
+                    logger.info("Session updated successfully")
             
             return translated_audio
             
