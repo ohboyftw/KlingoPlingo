@@ -6,6 +6,7 @@ import base64
 import threading
 import queue
 import time
+import numpy as np
 from typing import Optional, Tuple, Generator, AsyncGenerator
 import websockets
 import openai
@@ -16,13 +17,17 @@ logger = logging.getLogger(__name__)
 class RealtimeTranslationService:
     """Real-time speech-to-speech translation service using GPT Realtime API."""
     
-    def __init__(self):
+    def __init__(self, model: str = "gpt-realtime-2025-08-28"):
         self.api_key = os.getenv('OPENAI_API_KEY')
         self.base_url = os.getenv('OPENAI_API_BASE', 'wss://api.openai.com/v1')
+        self.model = model
         self.websocket = None
         self.audio_queue = queue.Queue()
         self.response_queue = queue.Queue()
-        
+        self.transcription_queue = queue.Queue()
+        self.backpressure_event = asyncio.Event()
+        self.backpressure_event.set()  # Start with no backpressure
+
         # Available voices with characteristics
         self.voices = {
             'alloy': {'name': 'Alloy', 'description': 'Neutral, clear'},
@@ -48,68 +53,69 @@ class RealtimeTranslationService:
             'neutral': 'Use selected voice without preservation',
             'enhanced': 'Enhance voice while preserving characteristics'
         }
-    
+
     async def connect_websocket(self) -> bool:
         """Establish WebSocket connection to GPT-Realtime API."""
         try:
-            # Use correct WebSocket URL format
-            ws_url = f"{self.base_url}/realtime?model=gpt-realtime"
+            if not self.api_key:
+                logger.error("OpenAI API key is not set")
+                return False
+            
+            ws_url = f"{self.base_url}/realtime?model={self.model}"
+            
+            logger.info(f"Connecting to WebSocket URL: {ws_url}")
             
             self.websocket = await websockets.connect(
                 ws_url,
-                extra_headers={
+                additional_headers={
                     "Authorization": f"Bearer {self.api_key}",
                     "OpenAI-Beta": "realtime=v1"
                 }
             )
-            logger.info("WebSocket connection established to GPT-Realtime")
+            logger.info("WebSocket connection established")
+
             return True
         except Exception as e:
             logger.error(f"Failed to connect to WebSocket: {e}")
             return False
-    
+
     async def configure_session(self, voice: str = 'alloy', voice_mode: str = 'neutral', 
                               target_lang: str = 'fr'):
         """Configure the realtime session with translation instructions."""
-        
-        # Create instruction based on voice preservation mode
         instructions = self._get_translation_instructions(voice_mode, target_lang)
         
+        # session_config = {
+        #     "type": "session.update",
+        #     "session": {
+        #         "modalities": ["text", "audio"],
+        #         "instructions": instructions,
+        #         "voice": voice,
+        #         "input_audio_format": "pcm16",
+        #         "output_audio_format": "pcm16",
+        #         "input_audio_transcription": {"model": "whisper-1"},
+        #         "turn_detection": {"type": "server_vad", "threshold": 0.5, "prefix_padding_ms": 300, "silence_duration_ms": 200},
+        #         "tools": [],
+        #         "tool_choice": "auto",
+        #         "temperature": 0.6,
+        #         "max_response_output_tokens": 4096
+        #     }
+        # }
+
         session_config = {
             "type": "session.update",
             "session": {
-                "type": "realtime",
                 "model": "gpt-realtime",
-                "output_modalities": ["audio"],
-                "audio": {
-                    "input": {
-                        "format": "pcm16",
-                        "turn_detection": {"type": "semantic_vad", "create_response": True}
-                    },
-                    "output": {
-                        "format": "pcm16",
-                        "voice": voice,
-                        "speed": 1.0
-                    }
-                },
-                "input_audio_transcription": {"model": "whisper-1"},
                 "instructions": instructions,
-                "temperature": 0.6,
-                "max_response_output_tokens": 4096
             }
         }
         
         await self.websocket.send(json.dumps(session_config))
         logger.info(f"Session configured with voice: {voice}, mode: {voice_mode}")
-    
+
     def _get_translation_instructions(self, voice_mode: str, target_lang: str) -> str:
-        """Generate translation instructions following OpenAI's best practices."""
-        
-        # Handle invalid language gracefully
         lang_info = self.languages.get(target_lang, {'name': target_lang.title()})
         lang_name = lang_info['name']
         
-        # Base instruction following recommended structure
         base_instruction = f"""# Role & Objective
 You are a professional speech translator specializing in French, English, and German.
 Your task is to translate spoken input to {lang_name} while maintaining natural conversation flow.
@@ -137,7 +143,6 @@ Your task is to translate spoken input to {lang_name} while maintaining natural 
 - Do not repeat the same sentence twice
 - Vary your responses so it doesn't sound robotic"""
 
-        # Add voice mode specific instructions
         if voice_mode == 'preserve':
             voice_instructions = """
 
@@ -170,51 +175,49 @@ Your task is to translate spoken input to {lang_name} while maintaining natural 
 - Maintain professional, consistent vocal delivery"""
 
         return base_instruction + voice_instructions
-    
+
+    async def send_text(self, text: str):
+        """Sends text to the realtime session."""
+        if not self.websocket:
+            raise Exception("WebSocket connection not established")
+        
+        message = {"type": "input_text_buffer.append", "text": text}
+        await self.websocket.send(json.dumps(message))
+        await self.websocket.send(json.dumps({"type": "input_text_buffer.commit"}))
+
     async def translate_audio_streaming(self, audio_generator, voice: str = 'alloy', 
                                        voice_mode: str = 'preserve', target_lang: str = 'fr'):
-        """
-        Stream audio translation using GPT Realtime API.
-        
-        Args:
-            audio_generator: Generator yielding audio chunks (bytes)
-            voice: Voice to use for output
-            voice_mode: Voice preservation mode ('preserve', 'neutral', 'enhanced')  
-            target_lang: Target language ('en' or 'fr')
-            
-        Yields:
-            Translated audio chunks
-        """
         if not await self.connect_websocket():
             raise Exception("Failed to establish WebSocket connection")
         
         try:
             await self.configure_session(voice, voice_mode, target_lang)
             
-            # Start listening for responses
             response_task = asyncio.create_task(self._handle_responses())
             
-            # Stream audio input
+            total_audio_bytes = 0
+            
             async for audio_chunk in audio_generator:
+                await self.backpressure_event.wait()
                 if audio_chunk:
+                    total_audio_bytes += len(audio_chunk)
                     message = {
                         "type": "input_audio_buffer.append",
                         "audio": base64.b64encode(audio_chunk).decode()
                     }
                     await self.websocket.send(json.dumps(message))
             
-            # Commit audio for processing
-            await self.websocket.send(json.dumps({
-                "type": "input_audio_buffer.commit"
-            }))
+            if total_audio_bytes == 0:
+                raise Exception("No audio data provided in streaming mode")
+
+            await self.websocket.send(json.dumps({"type": "input_audio_buffer.commit"}))
             
-            # Yield translated audio chunks
             while True:
                 try:
-                    audio_chunk = self.response_queue.get(timeout=1.0)
-                    if audio_chunk is None:  # End signal
+                    response = self.response_queue.get(timeout=1.0)
+                    if response is None:
                         break
-                    yield audio_chunk
+                    yield response
                 except queue.Empty:
                     continue
                     
@@ -225,42 +228,49 @@ Your task is to translate spoken input to {lang_name} while maintaining natural 
             if self.websocket:
                 await self.websocket.close()
                 self.websocket = None
-    
+
+    def _validate_audio_buffer(self, audio_data: bytes, context: str = "") -> None:
+        if audio_data is None or len(audio_data) == 0:
+            raise Exception(f"No audio data provided {context}")
+        
+        min_samples = int(0.1 * 24000)
+        min_bytes = min_samples * 2
+        
+        if len(audio_data) < min_bytes:
+            duration_ms = (len(audio_data) / 48)
+            raise Exception(f"Audio too short {context}: {duration_ms:.2f}ms, minimum 100ms required")
+        
+        audio_array = np.frombuffer(audio_data, dtype=np.int16)
+        if np.max(np.abs(audio_array)) < 10:
+            logger.warning(f"Audio appears to be silent or very quiet {context}")
+        
+        logger.info(f"Audio validation passed {context}")
+
     async def translate_audio_single_shot(self, audio_data: bytes, voice: str = 'alloy',
                                          voice_mode: str = 'preserve', target_lang: str = 'fr') -> bytes:
-        """
-        Single-shot audio translation using GPT Realtime API.
-        
-        Args:
-            audio_data: Complete audio data as bytes
-            voice: Voice to use for output
-            voice_mode: Voice preservation mode
-            target_lang: Target language
-            
-        Returns:
-            Complete translated audio as bytes
-        """
         if not await self.connect_websocket():
             raise Exception("Failed to establish WebSocket connection")
         
         try:
             await self.configure_session(voice, voice_mode, target_lang)
             
-            # Send entire audio at once
-            message = {
-                "type": "input_audio_buffer.append", 
-                "audio": base64.b64encode(audio_data).decode()
-            }
+            self._validate_audio_buffer(audio_data, "(single-shot)")
+            
+            audio_b64 = base64.b64encode(audio_data).decode('ascii')
+            
+            message = {"type": "input_audio_buffer.append", "audio": audio_b64}
+           # logger.info(f"Sending audio data: {json.dumps(message)}")
             await self.websocket.send(json.dumps(message))
+
+            await asyncio.sleep(0.1) # Add a small delay
             
-            # Commit and trigger processing
-            await self.websocket.send(json.dumps({
-                "type": "input_audio_buffer.commit"
-            }))
+            commit_message = {"type": "input_audio_buffer.commit"}
+            with open("commit_message.log", "w") as f:
+                f.write(json.dumps(commit_message))
+            await self.websocket.send(json.dumps(commit_message))
             
-            # Collect all response audio
             translated_audio = b""
-            timeout = time.time() + 30  # 30 second timeout
+            timeout = time.time() + 30
             
             async for message in self.websocket:
                 if time.time() > timeout:
@@ -269,12 +279,9 @@ Your task is to translate spoken input to {lang_name} while maintaining natural 
                 event = json.loads(message)
                 
                 if event["type"] == "response.audio.delta":
-                    audio_chunk = base64.b64decode(event["delta"])
-                    translated_audio += audio_chunk
-                    
+                    translated_audio += base64.b64decode(event["delta"])
                 elif event["type"] == "response.audio.done":
                     break
-                    
                 elif event["type"] == "error":
                     raise Exception(f"API error: {event.get('error', {}).get('message', 'Unknown error')}")
             
@@ -287,21 +294,24 @@ Your task is to translate spoken input to {lang_name} while maintaining natural 
             if self.websocket:
                 await self.websocket.close()
                 self.websocket = None
-    
+
     async def _handle_responses(self):
-        """Handle incoming WebSocket responses and queue audio chunks."""
         try:
             async for message in self.websocket:
                 event = json.loads(message)
                 
                 if event["type"] == "response.audio.delta":
-                    audio_chunk = base64.b64decode(event["delta"])
-                    self.response_queue.put(audio_chunk)
-                    
-                elif event["type"] == "response.audio.done":
-                    self.response_queue.put(None)  # End signal
-                    break
-                    
+                    self.response_queue.put(base64.b64decode(event["delta"]))
+                elif event["type"] == "response.text.delta":
+                    self.transcription_queue.put(event["delta"])
+                elif event["type"] == "response.audio.done" or event["type"] == "response.text.done":
+                    self.response_queue.put(None)
+                elif event["type"] == "warning":
+                    logger.warning(f"Received warning: {event.get('warning')}")
+                    if "backpressure" in event.get('warning', ''):
+                        self.backpressure_event.clear()
+                elif event["type"] == "session.idle":
+                    self.backpressure_event.set()
                 elif event["type"] == "error":
                     logger.error(f"WebSocket error: {event}")
                     self.response_queue.put(None)
@@ -310,18 +320,79 @@ Your task is to translate spoken input to {lang_name} while maintaining natural 
         except Exception as e:
             logger.error(f"Response handler error: {e}")
             self.response_queue.put(None)
-    
+
     def get_language_info(self, lang_code: str) -> dict:
-        """Get language information including name and flag."""
         return self.languages.get(lang_code, {'name': lang_code, 'flag': '🌐'})
     
     def get_voice_options(self) -> dict:
-        """Get available voice options."""
         return self.voices
     
     def get_voice_mode_options(self) -> dict:
-        """Get voice preservation mode options."""
         return self.voice_modes
 
 # Global service instance
 translation_service = RealtimeTranslationService()
+
+# Text-based translation using standard OpenAI client
+def translate_text_openai(text: str, source_lang: str, target_lang: str) -> Tuple[str, str, str]:
+    """
+    Translate text using OpenAI's standard chat completion API.
+    
+    Returns:
+        Tuple of (translated_text, detected_source_language, target_language)
+    """
+    try:
+        client = OpenAI()
+        
+        # Determine source language for prompt
+        if source_lang == "auto":
+            source_prompt = "auto-detected language"
+        else:
+            source_prompt = translation_service.get_language_info(source_lang)['name']
+        
+        target_prompt = translation_service.get_language_info(target_lang)['name']
+        
+        # Create system prompt
+        system_prompt = f"""You are an expert translator.
+Translate the user's text from {source_prompt} to {target_prompt}.
+First, on a single line, identify the source language using its two-letter ISO 639-1 code.
+Then, on a new line, provide only the translated text.
+Example:
+en
+Hello, how are you?
+"""
+        
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": text}
+            ],
+            temperature=0.5,
+            max_tokens=1024
+        )
+        
+        # Parse response
+        content = response.choices[0].message.content.strip()
+        lines = content.split('\n', 1)
+        
+        if len(lines) == 2:
+            detected_source = lines[0].strip()
+            translated_text = lines[1].strip()
+            
+            # Validate detected language code
+            if detected_source not in translation_service.languages:
+                detected_source = "en" # Fallback
+                
+            return translated_text, detected_source, target_lang
+            
+        else:
+            # Fallback if response format is unexpected
+            return content, source_lang if source_lang != "auto" else "en", target_lang
+            
+    except Exception as e:
+        logger.error(f"Text translation error: {e}")
+        raise Exception(f"Failed to translate text: {str(e)}")
+
+# Monkey-patch the service with the text translation function
+RealtimeTranslationService.translate_text = staticmethod(translate_text_openai)

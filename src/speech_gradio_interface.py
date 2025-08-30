@@ -40,6 +40,15 @@ class SpeechTranslationInterface:
             return None, "❌ Please record or upload audio first"
         
         try:
+            # Debug: Log audio input details
+            print(f"DEBUG: Audio input type: {type(audio_input)}")
+            print(f"DEBUG: Audio input content: {audio_input if not isinstance(audio_input, tuple) else f'tuple with {len(audio_input)} elements'}")
+            
+            if isinstance(audio_input, tuple) and len(audio_input) == 2:
+                sample_rate, audio_data = audio_input
+                print(f"DEBUG: Sample rate: {sample_rate}, Audio data shape: {audio_data.shape if hasattr(audio_data, 'shape') else 'No shape'}")
+                print(f"DEBUG: Audio data type: {type(audio_data)}, Length: {len(audio_data) if hasattr(audio_data, '__len__') else 'No length'}")
+            
             # Parse language pair
             _, source_lang, target_lang = next(
                 (pair for pair in self.language_pairs if pair[0] == language_pair),
@@ -48,6 +57,11 @@ class SpeechTranslationInterface:
             
             # Convert audio to required format
             audio_bytes = self.audio_processor.convert_from_gradio_format(audio_input)
+            
+            # Early validation check - don't proceed if audio is too short
+            if len(audio_bytes) < 4800:  # 100ms at 24kHz, 16-bit
+                duration_ms = (len(audio_bytes) / 2 / 24000) * 1000
+                return None, f"❌ Recording too short: {duration_ms:.1f}ms (minimum 100ms required). Please record for at least 1 second."
             
             # Run async translation
             loop = asyncio.new_event_loop()
@@ -95,6 +109,11 @@ class SpeechTranslationInterface:
             
             # Convert audio to required format
             audio_bytes = self.audio_processor.convert_from_gradio_format(audio_input)
+            
+            # Early validation check - don't proceed if audio is too short
+            if len(audio_bytes) < 4800:  # 100ms at 24kHz, 16-bit
+                duration_ms = (len(audio_bytes) / 2 / 24000) * 1000
+                return None, f"❌ Recording too short: {duration_ms:.1f}ms (minimum 100ms required). Please record for at least 1 second."
             
             # Run async streaming translation
             async def run_streaming_translation():
@@ -256,7 +275,8 @@ class SpeechTranslationInterface:
                     input_audio = gr.Audio(
                         label="Record or Upload Audio",
                         type="numpy",
-                        interactive=True
+                        interactive=True,
+                        sources=["microphone", "upload"]
                     )
                     
                     with gr.Row():
@@ -267,6 +287,7 @@ class SpeechTranslationInterface:
                             scale=2
                         )
                         clear_btn = gr.Button("🗑️ Clear", variant="secondary")
+                        replay_btn = gr.Button("▶️ Replay", variant="secondary")
                 
                 with gr.Column():
                     gr.HTML("<div class='audio-section'><h3>🔊 Translated Audio</h3></div>")
@@ -281,7 +302,7 @@ class SpeechTranslationInterface:
                         "<div style='text-align: center; color: #64748b;'>Ready for translation</div>"
                     )
             
-            # Voice Mode Information
+            # Voice Mode Information and Recording Tips
             with gr.Row():
                 gr.HTML("""
                 <div style="background: #f0f9ff; border: 1px solid #0ea5e9; border-radius: 0.5rem; padding: 1rem; margin: 1rem 0;">
@@ -290,6 +311,19 @@ class SpeechTranslationInterface:
                         <li><strong>Preserve:</strong> Maintains original speaker's voice characteristics and nuances</li>
                         <li><strong>Enhanced:</strong> Improves clarity while preserving voice identity</li>
                         <li><strong>Neutral:</strong> Uses selected voice profile without preservation</li>
+                    </ul>
+                </div>
+                """)
+            
+            with gr.Row():
+                gr.HTML("""
+                <div style="background: #fef3c7; border: 1px solid #f59e0b; border-radius: 0.5rem; padding: 1rem; margin: 1rem 0;">
+                    <h4 style="color: #92400e; margin-bottom: 0.5rem;">📝 Recording Tips:</h4>
+                    <ul style="color: #92400e; margin: 0; padding-left: 1.5rem;">
+                        <li><strong>Minimum Duration:</strong> Record for at least 1 second of clear speech</li>
+                        <li><strong>Audio Quality:</strong> Speak clearly in a quiet environment</li>
+                        <li><strong>Volume:</strong> Ensure you're speaking loud enough to be heard</li>
+                        <li><strong>Testing:</strong> Try saying "Hello, how are you?" for testing</li>
                     </ul>
                 </div>
                 """)
@@ -309,7 +343,10 @@ class SpeechTranslationInterface:
             def handle_clear():
                 """Clear all audio fields."""
                 return None, None, "<div style='text-align: center; color: #64748b;'>Ready for translation</div>"
-            
+
+            def replay_audio(audio_input):
+                return audio_input
+
             # Wire up events
             translate_btn.click(
                 fn=handle_translation,
@@ -326,6 +363,12 @@ class SpeechTranslationInterface:
             clear_btn.click(
                 fn=handle_clear,
                 outputs=[input_audio, output_audio, status_display]
+            )
+
+            replay_btn.click(
+                fn=replay_audio,
+                inputs=[input_audio],
+                outputs=[input_audio]
             )
             
             # Update status when processing mode changes

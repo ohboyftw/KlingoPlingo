@@ -81,9 +81,21 @@ class AudioProcessor:
             
             sample_rate, audio_array = audio_data
             
+            # Validate audio array
+            if audio_array is None or len(audio_array) == 0:
+                raise ValueError("Empty audio array provided")
+            
+            # Ensure we have at least 100ms of audio
+            min_samples = int(0.1 * sample_rate)  # 100ms at input sample rate
+            if len(audio_array) < min_samples:
+                logger.warning(f"Audio too short ({len(audio_array)} samples), padding to minimum length")
+                # Pad with silence to meet minimum requirement
+                padding_needed = min_samples - len(audio_array)
+                audio_array = np.concatenate([audio_array, np.zeros(padding_needed, dtype=audio_array.dtype)])
+            
             # Resample if necessary
             if sample_rate != self.sample_rate:
-                logger.warning(f"Resampling from {sample_rate}Hz to {self.sample_rate}Hz")
+                logger.info(f"Resampling from {sample_rate}Hz to {self.sample_rate}Hz")
                 # Simple resampling (for production, use librosa)
                 duration = len(audio_array) / sample_rate
                 target_length = int(duration * self.sample_rate)
@@ -93,15 +105,41 @@ class AudioProcessor:
                     audio_array
                 )
             
+            # Ensure audio array is in valid range [-1, 1]
+            audio_array = np.clip(audio_array, -1.0, 1.0)
+            
             # Convert to int16 PCM
             audio_int16 = (audio_array * 32767).astype(np.int16)
+
+            # Create an AudioSegment from the raw audio data
+            audio_segment = AudioSegment(audio_int16.tobytes(), frame_rate=self.sample_rate, sample_width=2, channels=1)
+
+            # Trim silence
+            trimmed_segment = self.trim_silence(audio_segment)
+
+            logger.info(f"Trimmed audio from {len(audio_segment)}ms to {len(trimmed_segment)}ms")
             
-            return audio_int16.tobytes()
+            result_bytes = trimmed_segment.raw_data
+            logger.info(f"Converted audio: {len(result_bytes)} bytes ({len(result_bytes)/(2*self.sample_rate)*1000:.1f}ms)")
+            
+            return result_bytes
             
         except Exception as e:
             logger.error(f"Audio conversion error: {e}")
             raise Exception(f"Failed to convert audio: {str(e)}")
     
+    def trim_silence(self, audio_segment, silence_thresh=-40, chunk_size=10):
+        """
+        Trims silence from the beginning of an audio segment.
+        """
+        start_trim = 0
+        for i in range(0, len(audio_segment), chunk_size):
+            if audio_segment[i:i+chunk_size].dBFS > silence_thresh:
+                start_trim = i
+                break
+
+        return audio_segment[start_trim:]
+
     async def chunk_audio_for_streaming(self, audio_bytes: bytes) -> AsyncGenerator[bytes, None]:
         """
         Split audio into chunks for streaming processing.
